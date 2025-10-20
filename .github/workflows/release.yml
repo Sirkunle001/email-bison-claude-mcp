@@ -1,0 +1,95 @@
+name: Build & Release binaries
+
+on:
+  push:
+    tags: ["v*.*.*"]   # triggers on tags like v0.3.1
+  workflow_dispatch:    # allows manual run from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller httpx python-dotenv mcp anyio
+
+      - name: Build single-file binary
+        shell: bash
+        run: |
+          set -e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            pyinstaller -F -n emailbison-mcp emailbison_mcp\\__main__.py
+          else
+            pyinstaller -F -n emailbison-mcp emailbison_mcp/__main__.py
+          fi
+          ls -lah dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: emailbison-mcp-${{ runner.os }}
+          path: |
+            dist/emailbison-mcp*
+            !dist/*.dSYM/**
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Collect assets
+        run: |
+          mkdir -p release
+          cp artifacts/emailbison-mcp-Windows/emailbison-mcp.exe release/emailbison-mcp-windows.exe || true
+          cp artifacts/emailbison-mcp-macOS/emailbison-mcp release/emailbison-mcp-macos || true
+          cp artifacts/emailbison-mcp-Linux/emailbison-mcp release/emailbison-mcp-linux || true
+          ls -lah release
+
+      - name: Read changelog for this tag (optional)
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          awk -v tag="$TAG" '
+            BEGIN { print_heading=0 }
+            /^## / {
+              if (print_heading==1) exit
+              if ($2==tag) print_heading=1
+            }
+            print_heading==1 { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            release/emailbison-mcp-windows.exe
+            release/emailbison-mcp-macos
+            release/emailbison-mcp-linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
