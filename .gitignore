@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Build artefacts
+build/
+dist/
+*.spec
+
+# Virtualenvs
+.venv/
+env/
+venv/
+
+# Local env files
+.env
