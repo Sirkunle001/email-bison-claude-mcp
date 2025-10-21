@@ -1,10 +1,16 @@
 import os, sys, json, platform
 from pathlib import Path
 from getpass import getpass
+
+
 def is_frozen():
     return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
 def app_dir():
     return Path(sys.executable).resolve().parent if is_frozen() else Path(__file__).resolve().parent.parent
+
+
 def detect_claude_config():
     system = platform.system()
     if system == "Windows":
@@ -17,6 +23,8 @@ def detect_claude_config():
     else:
         base = os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))
         return Path(base) / "Claude" / "claude_desktop_config.json"
+
+
 def read_json_or_empty(p: Path):
     if p.exists():
         try:
@@ -30,6 +38,8 @@ def read_json_or_empty(p: Path):
         except Exception:
             return {}
     return {}
+
+
 def write_json(p: Path, obj: dict):
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
@@ -40,19 +50,26 @@ def write_json(p: Path, obj: dict):
         except Exception:
             bak.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def install_into_claude():
     cfg = detect_claude_config()
     data = read_json_or_empty(cfg)
     data.setdefault("mcpServers", {})
+
+    # Path to this binary when frozen; otherwise point to a typical macOS build name
     if is_frozen():
         cmd_path = str(Path(sys.executable).resolve())
     else:
         cmd_path = str((app_dir() / "emailbison-mcp-macos").resolve())
-    data["mcpServers"]["emailbison"] = { "command": cmd_path }
+
+    data["mcpServers"]["emailbison"] = {"command": cmd_path}
     write_json(cfg, data)
     print(f"Installed 'emailbison' MCP server into: {cfg}")
     print(f"Command set to: {cmd_path}")
     print("Restart Claude Desktop to load the new MCP server.")
+
+
 def prompt_env_if_missing():
     has_key = bool(os.getenv("EMAILBISON_API_KEY"))
     has_url = bool(os.getenv("EMAILBISON_BASE_URL"))
@@ -60,25 +77,59 @@ def prompt_env_if_missing():
         return
     if not sys.stdin or not sys.stdin.isatty():
         return
+
     print("\n=== EmailBison MCP – First-run setup (optional) ===")
     print("Press Enter to skip any value and keep defaults.\n")
+
     key = os.getenv("EMAILBISON_API_KEY") or getpass("EMAILBISON_API_KEY: ")
     default_url = os.getenv("EMAILBISON_BASE_URL") or "https://send.highticket.agency"
     try:
         url = input(f"EMAILBISON_BASE_URL [{default_url}]: ").strip() or default_url
     except EOFError:
         url = default_url
+
     if not key and not url:
-        print("No values entered. Skipping .env creation.\n"); return
+        print("No values entered. Skipping .env creation.\n")
+        return
+
     dotenv_path = app_dir() / ".env"
     try:
         with open(dotenv_path, "w", encoding="utf-8") as f:
             f.write(f"EMAILBISON_API_KEY={key}\nEMAILBISON_BASE_URL={url}\n")
-        if key: os.environ["EMAILBISON_API_KEY"] = key
-        if url: os.environ["EMAILBISON_BASE_URL"] = url
+        if key:
+            os.environ["EMAILBISON_API_KEY"] = key
+        if url:
+            os.environ["EMAILBISON_BASE_URL"] = url
         print(f"\nSaved credentials to: {dotenv_path}\n")
     except Exception as e:
         print(f"Warning: could not write .env: {e}")
+
+
+# --- robust import of server.main for both frozen & source runs ---
+def _import_server_main():
+    import importlib
+
+    # 1) Prefer absolute import (works reliably in PyInstaller one-file mode)
+    try:
+        from emailbison_mcp.server import main as run_main  # type: ignore
+        return run_main
+    except Exception:
+        pass
+
+    # 2) Try relative import (works when running package directly via `python -m`)
+    try:
+        from .server import main as run_main  # type: ignore
+        return run_main
+    except Exception:
+        pass
+
+    # 3) Last resort: add the package dir to sys.path and import plain 'server'
+    pkg_dir = Path(__file__).resolve().parent
+    if str(pkg_dir) not in sys.path:
+        sys.path.insert(0, str(pkg_dir))
+    return importlib.import_module("server").main
+
+
 def cli():
     if "--install-claude" in sys.argv:
         try:
@@ -86,9 +137,13 @@ def cli():
         except Exception as e:
             print(f"Failed to install into Claude config: {e}")
         return
+
     prompt_env_if_missing()
-    from .server import main as run_main
+
+    run_main = _import_server_main()
     import asyncio
     asyncio.run(run_main())
+
+
 if __name__ == "__main__":
     cli()
